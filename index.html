@@ -9,6 +9,9 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 
+  <!-- Rotated image overlay plugin (drape photos inside their footprints) -->
+  <script src="https://cdn.jsdelivr.net/npm/leaflet-imageoverlay-rotated@0.2.1/Leaflet.ImageOverlay.Rotated.js"></script>
+
   <!-- exifr (full build with XMP support) -->
   <script src="https://cdn.jsdelivr.net/npm/exifr/dist/full.umd.js"></script>
 
@@ -276,19 +279,31 @@
     <path d="M8 42l14-10 10 8 8-6 14 10" stroke="#4a9eff" stroke-width="2" stroke-linejoin="round"/>
     <path d="M32 8v16M26 14l6-6 6 6" stroke="#00d4aa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
   </svg>
-  <p><strong>Drop a drone image here</strong><br>JPEG with DJI EXIF/XMP metadata<br>Supports DJI Mini, Air, Mavic, Phantom, Inspire</p>
-  <button class="btn-upload">Choose Image</button>
+  <p><strong>Drop drone images here</strong><br>One or many — JPEG, TIFF, or DNG with DJI EXIF/XMP<br>All footprints plot together for survey coverage</p>
+  <button class="btn-upload">Choose Images</button>
 </div>
-<input type="file" id="fileInput" accept="image/jpeg,image/jpg,image/tiff,image/png,.jpg,.jpeg,.tif,.tiff,.dng,.png">
+<input type="file" id="fileInput" multiple accept="image/jpeg,image/jpg,image/tiff,image/png,.jpg,.jpeg,.tif,.tiff,.dng,.png">
 
 <!-- Main App -->
 <div id="main">
   <!-- Left: data panel -->
   <div id="left">
+    <!-- Thumbnail strip + batch controls (shown when images are loaded) -->
+    <div id="strip-bar" style="display:none; flex-shrink:0; border-bottom:1px solid var(--border); background:var(--panel)">
+      <div style="display:flex; align-items:center; gap:8px; padding:8px 12px 4px">
+        <span id="strip-count" style="font-size:12px; color:var(--label); font-weight:600"></span>
+        <button class="map-btn" style="margin-left:auto; padding:3px 8px" onclick="showAllImages()" title="Show all on map">👁 All</button>
+        <button class="map-btn" style="padding:3px 8px" onclick="hideAllImages()" title="Hide all from map">🚫 None</button>
+        <button class="map-btn" style="padding:3px 8px" onclick="openFilePicker()">+ Add</button>
+        <button class="map-btn" style="padding:3px 8px" onclick="exportCSV()">⬇ CSV</button>
+        <button class="map-btn" style="padding:3px 8px" onclick="clearImages()">Clear</button>
+      </div>
+      <div id="strip" style="display:flex; gap:6px; overflow-x:auto; padding:6px 12px 10px"></div>
+    </div>
     <div id="preview-wrap">
       <img id="preview-img" src="" alt="">
       <div id="preview-placeholder" style="display:none; position:absolute; inset:0; align-items:center; justify-content:center; background:var(--card); color:var(--muted)"></div>
-      <button id="btn-change" onclick="document.getElementById('fileInput').click()">⟳ Change</button>
+      <button id="btn-change" onclick="document.getElementById('fileInput').click()">＋ Add images</button>
       <div id="preview-overlay">
         <div class="filename" id="ov-filename"></div>
         <div class="filesize" id="ov-filesize"></div>
@@ -362,6 +377,8 @@
       <div class="map-sep"></div>
       <button class="map-btn" id="btn-marker" onclick="toggleLayer('marker')">📍 Location</button>
       <button class="map-btn" id="btn-footprint" onclick="toggleLayer('footprint')">⬜ Footprint</button>
+      <button class="map-btn" id="btn-overlay" onclick="toggleLayer('overlay')">🖼 Drape images</button>
+      <button class="map-btn" id="btn-measure" onclick="openMeasure()">📏 Measure</button>
       <div style="margin-left:auto; font-size:11px; color: var(--muted)" id="map-coords"></div>
     </div>
     <div id="map"></div>
@@ -373,10 +390,35 @@
       <!-- Static attribution — always shown, independent of Leaflet's dynamic control.
            Guarantees OSM/Esri credit in every browser incl. Firefox on file:// -->
       <span id="sb-attrib" style="margin-left:auto; color: var(--muted)">
-        <span id="attrib-road">© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener" style="color:var(--accent)">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions" target="_blank" rel="noopener" style="color:var(--accent)">CARTO</a></span>
+        <span id="attrib-road">Map © <a href="https://www.esri.com" target="_blank" rel="noopener" style="color:var(--accent)">Esri</a>, HERE, Garmin, USGS, &amp; the GIS community</span>
         <span id="attrib-sat" style="display:none">Imagery © <a href="https://www.esri.com" target="_blank" rel="noopener" style="color:var(--accent)">Esri</a>, Maxar, Earthstar Geographics</span>
       </span>
     </div>
+  </div>
+</div>
+
+<!-- Measure tool modal -->
+<div id="measure-modal" style="display:none; position:fixed; inset:0; z-index:10000; background:rgba(8,10,15,.94); flex-direction:column;">
+  <div style="display:flex; align-items:center; gap:14px; padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--border); flex-wrap:wrap;">
+    <b id="measure-title" style="color:var(--text); font-size:14px;"></b>
+    <span id="measure-readout" style="color:var(--label); font-size:13px;">Click two points on the image to measure</span>
+    <span style="margin-left:auto; display:flex; align-items:center; gap:6px;">
+      <button class="map-btn" onclick="measureZoomBy(1/1.25)" title="Zoom out">−</button>
+      <span id="measure-zoom" style="font-size:12px; color:var(--label); min-width:42px; text-align:center;">100%</span>
+      <button class="map-btn" onclick="measureZoomBy(1.25)" title="Zoom in">+</button>
+      <button class="map-btn" onclick="measureFit()" title="Fit to window">Fit</button>
+    </span>
+    <button class="map-btn" onclick="resetMeasure()">↺ Reset</button>
+    <button class="map-btn" onclick="closeMeasure()">✕ Close</button>
+  </div>
+  <div id="measure-stage" style="flex:1; overflow:auto; padding:16px; text-align:center;">
+    <div id="measure-wrap" style="position:relative; display:inline-block; line-height:0; vertical-align:middle;">
+      <img id="measure-img" alt="" style="display:block; max-width:95vw; max-height:calc(100vh - 150px);">
+      <svg id="measure-svg" style="position:absolute; inset:0; width:100%; height:100%; cursor:crosshair;"></svg>
+    </div>
+  </div>
+  <div style="padding:6px 16px; color:var(--muted); font-size:11px; background:var(--panel); border-top:1px solid var(--border);">
+    Pixel distance is measured in the image's full resolution (<span id="measure-dim"></span>). Ground distance uses the estimated GSD; accurate for near-nadir imagery over flat terrain.
   </div>
 </div>
 
@@ -487,22 +529,25 @@ function resolveSensor(model = '', imgW, imgH, isTiff, bandName) {
 }
 
 // ── Map state ──────────────────────────────────────────────────────────────
-let map, tileRoad, tileSat, markerLayer, footprintLayer;
+let map, tileRoad, tileSat, markerLayer, footprintLayer, overlayLayer;
 let currentBasemap = 'road';
-let layerState = { marker: true, footprint: true };
+let layerState = { marker: true, footprint: true, overlay: false };
 let currentExif = null;
 
 function initMap() {
   map = L.map('map', { zoomControl: true, maxZoom: 22 });
 
-  // Road basemap: CARTO Voyager. Same OpenStreetMap data, but served from a CDN that
-  // does NOT require an HTTP Referer — so it loads from file:// in Firefox, unlike
-  // tile.openstreetmap.org which returns 403 "Referer is required" for local files.
-  tileRoad = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank">CARTO</a>',
-    subdomains: 'abcd',
-    maxZoom: 20,
-  });
+  // Road basemap: Esri World Street Map (ArcGIS Online). No API key and no Referer
+  // requirement, so it loads from file:// in Firefox — unlike tile.openstreetmap.org
+  // (403 "Referer required") and CARTO basemaps (now require an API key).
+  tileRoad = L.tileLayer(
+    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+    {
+      attribution: 'Map &copy; <a href="https://www.esri.com" target="_blank">Esri</a>, HERE, Garmin, USGS, &amp; the GIS community',
+      maxZoom: 22,
+      maxNativeZoom: 19,
+    }
+  );
 
   // Satellite: Esri World Imagery. Native tiles to z19; maxNativeZoom lets Leaflet
   // up-scale beyond that (to z22) so you can zoom in closer for detail inspection.
@@ -518,6 +563,8 @@ function initMap() {
   tileRoad.addTo(map);
   map.setView([20, 0], 2);
 
+  // overlayLayer is added first so draped photos sit BELOW footprint outlines & markers
+  overlayLayer   = L.layerGroup().addTo(map);
   markerLayer    = L.layerGroup().addTo(map);
   footprintLayer = L.layerGroup().addTo(map);
 
@@ -556,10 +603,36 @@ function toggleLayer(which) {
   if (which === 'marker') {
     if (layerState.marker) map.addLayer(markerLayer);
     else map.removeLayer(markerLayer);
-  } else {
+  } else if (which === 'footprint') {
     if (layerState.footprint) map.addLayer(footprintLayer);
     else map.removeLayer(footprintLayer);
+  } else if (which === 'overlay') {
+    if (layerState.overlay) { map.addLayer(overlayLayer); buildOverlays(); }
+    else { overlayLayer.clearLayers(); map.removeLayer(overlayLayer); }
   }
+}
+
+// Drape each renderable photo inside its footprint (rough live orthomosaic).
+// Uses the rotated image-overlay plugin so photos align with yaw-rotated footprints.
+function buildOverlays() {
+  if (!overlayLayer) return;
+  overlayLayer.clearLayers();
+  if (!(L.imageOverlay && L.imageOverlay.rotated)) {
+    console.warn('Rotated image-overlay plugin not loaded — cannot drape images.');
+    return;
+  }
+  images.forEach(rec => {
+    if (!rec.canRender || !rec.fpInfo) return;   // TIFF/DNG or no footprint → skip
+    if (rec.visible === false) return;            // hidden via strip toggle
+    const c = rec.fpInfo.corners;                 // [SW, SE, NE, NW] in local axes
+    // Image pixel space → ground: top-left=NW(c3), top-right=NE(c2), bottom-left=SW(c0)
+    const topLeft     = L.latLng(c[3][0], c[3][1]);
+    const topRight    = L.latLng(c[2][0], c[2][1]);
+    const bottomLeft  = L.latLng(c[0][0], c[0][1]);
+    const ov = L.imageOverlay.rotated(rec.url, topLeft, topRight, bottomLeft,
+      { opacity: 0.92, interactive: false });
+    overlayLayer.addLayer(ov);
+  });
 }
 
 // ── EXIF parsing & display ─────────────────────────────────────────────────
@@ -673,89 +746,33 @@ function computeGSD(altM, focalMM, sensorW, imgW) {
   return (altM * sensorW * 100) / (focalMM * imgW); // cm/px
 }
 
-async function processFile(file) {
-  document.getElementById('loading').classList.add('show');
-  try {
-    const exif = await exifr.parse(file, {
-      tiff: true, xmp: true, gps: true, exif: true, ifd0: true,
-      mergeOutput: true,   // single flat object — no namespace guessing
-      sanitize: false,
-      reviveValues: true,
-      translateValues: true,
-    });
+// ── Multi-image state ───────────────────────────────────────────────────────
+let images = [];      // array of analyzed records
+let activeIdx = -1;   // currently selected image
 
-    currentExif = exif;
-    showApp(file, exif);
-  } catch (e) {
-    console.error(e);
-    // Surface the error on-screen (not just the console) so failures are visible.
-    const banner = document.getElementById('no-gps');
-    banner.style.display = 'block';
-    banner.textContent = '⚠ Error reading image: ' + e.message;
-  } finally {
-    document.getElementById('loading').classList.remove('show');
-  }
-}
-
-function showApp(file, exif) {
-  // Show main layout
-  document.getElementById('dropzone').style.display = 'none';
-  document.getElementById('main').classList.add('visible');
-
-  // Preview — browsers can render JPEG/PNG but NOT TIFF or DNG.
-  const url = URL.createObjectURL(file);
-  const previewImg = document.getElementById('preview-img');
-  const canRender = /\.(jpe?g|png|webp|gif|bmp)$/i.test(file.name) ||
-                    /(jpeg|png|webp|gif|bmp)/i.test(file.type || '');
-  const previewPlaceholder = document.getElementById('preview-placeholder');
-  if (canRender) {
-    previewImg.style.display = '';
-    previewImg.src = url;
-    previewPlaceholder.style.display = 'none';
-  } else {
-    // TIFF / DNG etc. — show a placeholder; metadata still parses fine.
-    previewImg.style.display = 'none';
-    previewImg.removeAttribute('src');
-    previewPlaceholder.style.display = 'flex';
-    const ext = (file.name.split('.').pop() || 'file').toUpperCase();
-    previewPlaceholder.innerHTML =
-      `<div style="text-align:center;padding:0 20px">
-         <div style="font-size:34px;margin-bottom:6px">🗺️</div>
-         <div style="font-weight:600;color:var(--text)">${ext} — no browser preview</div>
-         <div style="font-size:11px;color:var(--muted);margin-top:4px">Metadata &amp; map below are fully parsed</div>
-       </div>`;
-  }
-  document.getElementById('ov-filename').textContent = file.name;
-  document.getElementById('ov-filesize').textContent = (file.size / 1024 / 1024).toFixed(2) + ' MB';
-
-  // With mergeOutput:true, exifr returns one flat object — all tags directly accessible.
-  // DJI XMP keys have their namespace prefix stripped (RelativeAltitude, not drone-dji:RelativeAltitude).
+// Parse + derive everything for ONE file → returns a record (no DOM writes).
+async function analyzeImage(file) {
+  const exif = await exifr.parse(file, {
+    tiff: true, xmp: true, gps: true, exif: true, ifd0: true,
+    mergeOutput: true, sanitize: false, reviveValues: true, translateValues: true,
+  });
   const f = exif || {};
 
   // GPS
   const lat    = f.latitude;
   const lon    = f.longitude;
-  const altAbs = f.altitude ?? f.GPSAltitude;  // GPS ellipsoidal altitude (m)
-
-  // DJI XMP altitude tags (string like "+30.00" or number)
+  const altAbs = f.altitude ?? f.GPSAltitude;
   const altRelRaw = parseFloat(f.RelativeAltitude ?? f['drone-dji:RelativeAltitude']);
   const altAbsDji = parseFloat(f.AbsoluteAltitude ?? f['drone-dji:AbsoluteAltitude']);
   const altRel    = Number.isFinite(altRelRaw) ? altRelRaw : NaN;
   const bestAbs   = Number.isFinite(altAbsDji) ? altAbsDji : (Number.isFinite(parseFloat(altAbs)) ? parseFloat(altAbs) : NaN);
-
-  // Altitude for footprint: relative (AGL) if >0.1m, else absolute
-  const altForFP = (Number.isFinite(altRel) && Math.abs(altRel) > 0.1)
-    ? altRel
-    : (Number.isFinite(bestAbs) ? bestAbs : null);
-
+  const altForFP  = (Number.isFinite(altRel) && Math.abs(altRel) > 0.1)
+    ? altRel : (Number.isFinite(bestAbs) ? bestAbs : null);
   const hasGPS = lat !== undefined && lon !== undefined;
-  document.getElementById('no-gps').style.display = hasGPS ? 'none' : 'block';
 
-  // Camera
+  // Camera + optics
   const make  = f.Make  || '';
   const model = f.Model || '';
-
-  // Optics
   const focalMM   = f.FocalLength;
   const focal35mm = f.FocalLengthIn35mmFilm;
   const calFocal  = parseFloat(f.CalibratedFocalLength ?? f['drone-dji:CalibratedFocalLength']);
@@ -765,18 +782,16 @@ function showApp(file, exif) {
   const imgW      = f.PixelXDimension ?? f.ImageWidth;
   const imgH      = f.PixelYDimension ?? f.ImageLength;
 
-  // File type + multispectral / thermal metadata
+  // File type + spectral/thermal
   const isTiff = /\.tiff?$/i.test(file.name) || /tif/i.test(file.type || '');
-  // Multispectral band tags (DJI writes these on Mavic 3M / P4 Multispectral bands)
   const bandName    = f.BandName ?? f['Camera:BandName'] ?? f['drone-dji:BandName'];
   const centralWave = f.CentralWavelength ?? f['Camera:CentralWavelength'];
   const waveFWHM    = f.WavelengthFWHM ?? f['Camera:WavelengthFWHM'];
   const irradiance  = f.Irradiance ?? f['Camera:Irradiance'];
   const blackLevel  = f.BlackLevel;
-  // Thermal — DJI radiometric JPEGs expose these via XMP when present
   const isThermalDim = (imgW === 640 && imgH === 512) || (imgW === 1280 && imgH === 1024);
 
-  // Gimbal / flight (DJI XMP)
+  // Gimbal / flight
   const gPitch = parseFloat(f.GimbalPitchDegree ?? f['drone-dji:GimbalPitchDegree']);
   const gRoll  = parseFloat(f.GimbalRollDegree  ?? f['drone-dji:GimbalRollDegree']);
   const gYaw   = parseFloat(f.GimbalYawDegree   ?? f['drone-dji:GimbalYawDegree']);
@@ -788,49 +803,110 @@ function showApp(file, exif) {
   const fSz    = parseFloat(f.FlightZSpeed ?? f['drone-dji:FlightZSpeed']);
   const rtkFlag = f.RtkFlag ?? f['drone-dji:RtkFlag'];
 
-  // For display convenience — these were previously pulled from dji/flat
-  const dji = { GimbalPitchDegree: gPitch, GimbalRollDegree: gRoll, GimbalYawDegree: gYaw,
-                FlightPitchDegree: fPitch, FlightRollDegree: fRoll, FlightYawDegree: fYaw,
-                FlightXSpeed: fSx, FlightYSpeed: fSy, FlightZSpeed: fSz,
-                RtkFlag: rtkFlag, RelativeAltitude: altRel, AbsoluteAltitude: bestAbs };
-
-  // Sensor size + focal length for footprint/GSD
-  // NOTE: CalibratedFocalLength (calFocal) is in PIXELS — never use for mm-based math.
-  // The footprint only needs the field of view, which can come from several sources.
-  // resolveSensor picks the correct sub-camera (wide / thermal / multispectral).
+  // Sensor + FOV source (identical logic to before)
   let sensorInfo = resolveSensor(model, imgW, imgH, isTiff, bandName);
   let sensor = sensorInfo ? { w: sensorInfo.w, h: sensorInfo.h } : null;
   const camType = sensorInfo ? sensorInfo.cam : null;
-  let focalForCalc = focalMM;      // actual focal length in mm
+  let focalForCalc = focalMM;
   let fovSource = sensor ? ('sensor DB (' + camType + ')') : null;
-
   if (sensor && focalMM) {
     fovSource = 'sensor DB (' + camType + ') + focal';
   } else if (focalMM && focal35mm) {
-    // Derive physical sensor from the crop implied by the 35mm-equivalent focal length.
-    const scale = focalMM / focal35mm;   // e.g. 6.7/24 ≈ 0.28
+    const scale = focalMM / focal35mm;
     sensor = { w: 36 * scale, h: 24 * scale };
     focalForCalc = focalMM;
     fovSource = 'derived from 35mm equiv';
   } else if (focal35mm) {
-    // Only the 35mm-equivalent focal length is known → assume full-frame.
-    // FOV is identical to (real sensor + real focal), so footprint stays correct.
     sensor = { w: 36, h: 24 };
     focalForCalc = focal35mm;
     fovSource = 'full-frame + 35mm equiv';
   }
 
-  // Build an explicit list of what's missing, for the on-screen diagnostic.
   const fpMissing = [];
-  if (!hasGPS)        fpMissing.push('GPS position');
+  if (!hasGPS) fpMissing.push('GPS position');
   if (!sensor || !focalForCalc) fpMissing.push('lens/sensor (need camera model or 35mm-equiv focal length)');
-  if (!altForFP)      fpMissing.push('altitude');
+  if (!altForFP) fpMissing.push('altitude');
 
-  const gsd    = (sensor && focalForCalc && imgW && altForFP) ? computeGSD(altForFP, focalForCalc, sensor.w, imgW) : null;
-  let   fpInfo = null;
+  const gsd = (sensor && focalForCalc && imgW && altForFP) ? computeGSD(altForFP, focalForCalc, sensor.w, imgW) : null;
+  let fpInfo = null;
   if (hasGPS && sensor && focalForCalc && altForFP) {
     fpInfo = computeFootprint(lat, lon, altForFP, gYaw, gPitch, focalForCalc, sensor.w, sensor.h, imgW, imgH);
   }
+
+  const canRender = /\.(jpe?g|png|webp|gif|bmp)$/i.test(file.name) ||
+                    /(jpeg|png|webp|gif|bmp)/i.test(file.type || '');
+  const ext = (file.name.split('.').pop() || 'file').toUpperCase();
+
+  return {
+    file, name: file.name, size: file.size, url: URL.createObjectURL(file), canRender, ext, f, visible: true,
+    lat, lon, hasGPS, altRel, bestAbs, altForFP,
+    make, model, focalMM, focal35mm, calFocal, fNumber, exposure, iso, imgW, imgH,
+    isTiff, bandName, centralWave, waveFWHM, irradiance, blackLevel, isThermalDim,
+    gPitch, gRoll, gYaw, fPitch, fRoll, fYaw, fSx, fSy, fSz, rtkFlag,
+    sensor, camType, fovSource, fpMissing, gsd, fpInfo, focalForCalc,
+    dt: f.DateTimeOriginal || f.DateTime || f.CreateDate,
+  };
+}
+
+// Load one or more files, analyze, store, and display.
+async function processFiles(fileList) {
+  const files = Array.from(fileList || []).filter(x => x);
+  if (!files.length) return;
+  document.getElementById('loading').classList.add('show');
+  document.getElementById('dropzone').style.display = 'none';
+  document.getElementById('main').classList.add('visible');
+  const firstNew = images.length;
+  let errors = 0;
+  for (const file of files) {
+    try { images.push(await analyzeImage(file)); }
+    catch (e) { console.error('Failed to read', file.name, e); errors++; }
+  }
+  document.getElementById('loading').classList.remove('show');
+  if (!map) initMap();
+  renderStrip();
+  renderMap(true);              // fit to all
+  selectImage(Math.min(firstNew, images.length - 1));
+  if (errors) {
+    const banner = document.getElementById('no-gps');
+    banner.style.display = 'block';
+    banner.textContent = `⚠ ${errors} file(s) could not be read`;
+  }
+}
+
+// Show the details panel for one record (DOM writes).
+function renderDetails(rec) {
+  const f = rec.f;
+  const { lat, lon, hasGPS, altRel, bestAbs, altForFP, make, model,
+          focalMM, focal35mm, calFocal, fNumber, exposure, iso, imgW, imgH,
+          bandName, centralWave, waveFWHM, irradiance, blackLevel, isThermalDim,
+          gPitch, gRoll, gYaw, fPitch, fRoll, fYaw, fSx, fSy, fSz, rtkFlag,
+          sensor, camType, fovSource, fpMissing, gsd, fpInfo, focalForCalc } = rec;
+
+  // Preview
+  const previewImg = document.getElementById('preview-img');
+  const previewPlaceholder = document.getElementById('preview-placeholder');
+  if (rec.canRender) {
+    previewImg.style.display = ''; previewImg.src = rec.url;
+    previewPlaceholder.style.display = 'none';
+  } else {
+    previewImg.style.display = 'none'; previewImg.removeAttribute('src');
+    previewPlaceholder.style.display = 'flex';
+    previewPlaceholder.innerHTML =
+      `<div style="text-align:center;padding:0 20px">
+         <div style="font-size:34px;margin-bottom:6px">🗺️</div>
+         <div style="font-weight:600;color:var(--text)">${rec.ext} — no browser preview</div>
+         <div style="font-size:11px;color:var(--muted);margin-top:4px">Metadata &amp; map are fully parsed</div>
+       </div>`;
+  }
+  document.getElementById('ov-filename').textContent = rec.name;
+  document.getElementById('ov-filesize').textContent = (rec.size / 1024 / 1024).toFixed(2) + ' MB';
+  const bMeas = document.getElementById('btn-measure');
+  bMeas.style.opacity = rec.canRender ? '' : '0.4';
+  bMeas.style.pointerEvents = rec.canRender ? '' : 'none';
+  bMeas.title = rec.canRender ? 'Measure a distance on the selected image'
+                              : 'Measuring needs a viewable image (JPEG/PNG)';
+  document.getElementById('no-gps').style.display = hasGPS ? 'none' : 'block';
+  document.getElementById('no-gps').textContent = '⚠ No GPS data found in this image';
 
   // ── Render GPS section ──────────────────────────────────────────────────
   let gpsHtml = '';
@@ -987,103 +1063,346 @@ function showApp(file, exif) {
   document.getElementById('sb-footprint').innerHTML = fpInfo
     ? `<b>Footprint:</b> ${fpInfo.widthM.toFixed(0)}×${fpInfo.heightM.toFixed(0)} m` : '';
 
-  // ── Map ────────────────────────────────────────────────────────────────
-  if (!map) initMap();
+}
 
-  // Reset layer state on every image load — ensures button/map stay in sync
-  layerState = { marker: true, footprint: true };
+// ── Select an image (updates details panel, strip highlight, map focus) ──────
+function selectImage(i) {
+  if (i < 0 || i >= images.length) return;
+  activeIdx = i;
+  renderDetails(images[i]);
+  renderMap(false);            // restyle without refitting
+  updateStripHighlight();
+  const rec = images[i];
+  if (rec.hasGPS && map) map.panTo([rec.lat, rec.lon]);
+}
+
+// ── Toggle one image's visibility on the map (from the thumbnail strip) ───────
+function toggleImageVisible(i) {
+  if (i < 0 || i >= images.length) return;
+  const rec = images[i];
+  rec.visible = (rec.visible === false);   // flip
+  activeIdx = i;                            // also focus its metadata in the panel
+  renderDetails(rec);
+  renderMap(false);
+  renderStrip();                            // refresh dim state + eye badges
+  if (rec.visible && rec.hasGPS && map) map.panTo([rec.lat, rec.lon]);
+}
+
+function setAllVisible(v) {
+  images.forEach(r => r.visible = v);
+  renderMap(true);
+  renderStrip();
+}
+function showAllImages() { setAllVisible(true); }
+function hideAllImages() { setAllVisible(false); }
+
+// ── Coverage map: plot ALL images; highlight the active one ──────────────────
+function renderMap(fitAll) {
+  if (!map) initMap();
+  layerState.marker = (layerState.marker !== false);
+  layerState.footprint = (layerState.footprint !== false);
   if (!map.hasLayer(markerLayer))    markerLayer.addTo(map);
   if (!map.hasLayer(footprintLayer)) footprintLayer.addTo(map);
   markerLayer.clearLayers();
   footprintLayer.clearLayers();
 
-  // Reset button styles
+  const allPts = [];
+  let anyFootprint = false, anyGPS = false;
+
+  images.forEach((rec, i) => {
+    if (!rec.hasGPS) return;
+    anyGPS = true;
+    if (rec.visible === false) return;   // hidden from map via strip toggle
+    const isActive = (i === activeIdx);
+
+    // Footprint (active = solid teal; others = faint outline)
+    if (rec.fpInfo) {
+      anyFootprint = true;
+      const poly = L.polygon(rec.fpInfo.corners, isActive
+        ? { color: '#00d4aa', weight: 2, fillColor: '#00d4aa', fillOpacity: 0.15, dashArray: '6 4' }
+        : { color: '#00d4aa', weight: 1, fillColor: '#00d4aa', fillOpacity: 0.05, opacity: 0.5 });
+      poly.on('click', () => selectImage(i));
+      footprintLayer.addLayer(poly);
+      rec.fpInfo.corners.forEach(c => allPts.push(c));
+    }
+
+    // Location marker (active = rotated plane; others = small dot)
+    let marker;
+    if (isActive) {
+      const icon = L.divIcon({ className: '', iconSize: [32,32], iconAnchor: [16,16],
+        html: `<div style="width:32px;height:32px;border-radius:50%;background:rgba(74,158,255,.95);
+          border:3px solid #fff;display:flex;align-items:center;justify-content:center;
+          box-shadow:0 2px 12px rgba(0,0,0,.5);font-size:16px;
+          transform:rotate(${!isNaN(rec.gYaw) ? rec.gYaw : 0}deg)">✈</div>` });
+      marker = L.marker([rec.lat, rec.lon], { icon, zIndexOffset: 1000 });
+    } else {
+      marker = L.circleMarker([rec.lat, rec.lon],
+        { radius: 5, color: '#fff', weight: 1.5, fillColor: '#4a9eff', fillOpacity: 0.9 });
+    }
+    marker.bindPopup(
+      `<b>${rec.name}</b><br>${rec.model || 'Drone'}<br>${rec.lat.toFixed(6)}, ${rec.lon.toFixed(6)}` +
+      (rec.altForFP ? `<br>Alt (AGL): ${rec.altForFP.toFixed(1)} m` : '') +
+      (rec.gsd ? `<br>GSD: ${rec.gsd.toFixed(2)} cm/px` : ''));
+    marker.on('click', () => selectImage(i));
+    markerLayer.addLayer(marker);
+    allPts.push([rec.lat, rec.lon]);
+  });
+
+  // Button-enable flags reflect capability (ignore current per-image visibility)
+  anyGPS = images.some(r => r.hasGPS);
+  anyFootprint = images.some(r => r.hasGPS && r.fpInfo);
+
+  // Image drape overlays (rebuild if the toggle is on)
+  const anyDrapable = images.some(r => r.canRender && r.fpInfo);
+  if (layerState.overlay) {
+    if (!map.hasLayer(overlayLayer)) overlayLayer.addTo(map);
+    buildOverlays();
+  } else if (overlayLayer) {
+    overlayLayer.clearLayers();
+  }
+
+  // Layer toggle buttons
   const btnM = document.getElementById('btn-marker');
   const btnF = document.getElementById('btn-footprint');
-  btnM.classList.remove('active-green');
-  btnF.classList.remove('active-green');
-  btnM.style.opacity = ''; btnM.style.pointerEvents = '';
-  btnF.style.opacity = ''; btnF.style.pointerEvents = '';
+  const btnO = document.getElementById('btn-overlay');
+  btnM.classList.toggle('active-green', layerState.marker && anyGPS);
+  btnF.classList.toggle('active-green', layerState.footprint && anyFootprint);
+  btnO.classList.toggle('active-green', layerState.overlay && anyDrapable);
+  const setEnabled = (btn, on) => { btn.style.opacity = on ? '' : '0.4'; btn.style.pointerEvents = on ? '' : 'none'; };
+  setEnabled(btnM, anyGPS);
+  setEnabled(btnF, anyFootprint);
+  setEnabled(btnO, anyDrapable);
+  if (!layerState.marker) map.removeLayer(markerLayer);
+  if (!layerState.footprint) map.removeLayer(footprintLayer);
 
-  if (hasGPS) {
-    // Marker
-    const droneIcon = L.divIcon({
-      className: '',
-      html: `<div style="
-        width:32px;height:32px;border-radius:50%;
-        background:rgba(74,158,255,.9);border:3px solid #fff;
-        display:flex;align-items:center;justify-content:center;
-        box-shadow:0 2px 12px rgba(0,0,0,.5);font-size:16px;
-        transform:rotate(${!isNaN(gYaw) ? gYaw : 0}deg)">
-        ✈
-      </div>`,
-      iconSize: [32, 32],
-      iconAnchor: [16, 16],
-    });
-
-    const marker = L.marker([lat, lon], { icon: droneIcon })
-      .bindPopup(`
-        <b>${model || 'Drone'}</b><br>
-        ${lat.toFixed(6)}, ${lon.toFixed(6)}<br>
-        ${altForFP ? 'Alt (AGL): ' + altForFP.toFixed(1) + ' m' : (Number.isFinite(bestAbs) ? 'Alt: ' + bestAbs.toFixed(1) + ' m' : '')}
-        ${gsd ? '<br>GSD: ' + gsd.toFixed(2) + ' cm/px' : ''}
-      `);
-    markerLayer.addLayer(marker);
-
-    // Footprint polygon
-    if (fpInfo) {
-      const poly = L.polygon(fpInfo.corners, {
-        color: '#00d4aa', weight: 2,
-        fillColor: '#00d4aa', fillOpacity: 0.15,
-        dashArray: '6 4',
-      }).bindPopup(`
-        <b>Image Footprint</b><br>
-        ${fpInfo.widthM.toFixed(1)} × ${fpInfo.heightM.toFixed(1)} m<br>
-        Area: ${fpInfo.areaHa.toFixed(4)} ha<br>
-        FOV: ${fpInfo.fovH}° × ${fpInfo.fovV}°
-      `);
-      footprintLayer.addLayer(poly);
-    }
-
-    // Add center dot for footprint center
-    if (fpInfo) {
-      const centerDot = L.circleMarker([lat, lon], {
-        radius: 4, color: '#fff', weight: 2, fillColor: '#4a9eff', fillOpacity: 1
-      });
-      footprintLayer.addLayer(centerDot);
-    }
-
-    // Fit map — invalidateSize ensures tiles redraw correctly on 2nd+ load
-    map.invalidateSize();
-    if (fpInfo) {
-      const bounds = L.latLngBounds(fpInfo.corners);
-      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 21 });
-    } else {
-      map.setView([lat, lon], 17);
-    }
-
-    marker.openPopup();
-
-    // Activate layer buttons
-    document.getElementById('btn-marker').classList.add('active-green');
-    document.getElementById('btn-footprint').classList.toggle('active-green', !!fpInfo);
-    if (!fpInfo) {
-      document.getElementById('btn-footprint').style.opacity = '0.4';
-      document.getElementById('btn-footprint').style.pointerEvents = 'none';
-    } else {
-      document.getElementById('btn-footprint').style.opacity = '';
-      document.getElementById('btn-footprint').style.pointerEvents = '';
-    }
-  } else {
-    // No GPS — show world view
-    if (!map) initMap();
+  map.invalidateSize();
+  if (fitAll && allPts.length) {
+    map.fitBounds(L.latLngBounds(allPts), { padding: [40, 40], maxZoom: 20 });
+  } else if (fitAll && !anyGPS) {
     map.setView([20, 0], 2);
-    document.getElementById('btn-marker').style.opacity = '0.4';
-    document.getElementById('btn-marker').style.pointerEvents = 'none';
-    document.getElementById('btn-footprint').style.opacity = '0.4';
-    document.getElementById('btn-footprint').style.pointerEvents = 'none';
   }
 }
+
+// ── Thumbnail strip ──────────────────────────────────────────────────────────
+function renderStrip() {
+  const bar = document.getElementById('strip-bar');
+  const strip = document.getElementById('strip');
+  bar.style.display = images.length ? '' : 'none';
+  document.getElementById('strip-count').textContent =
+    images.length + (images.length === 1 ? ' image' : ' images');
+  strip.innerHTML = images.map((rec, i) => {
+    const hidden = rec.visible === false;
+    const thumb = rec.canRender
+      ? `<img src="${rec.url}" style="width:100%;height:100%;object-fit:cover">`
+      : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;
+           background:var(--card);color:var(--muted);font-size:10px;font-weight:600">${rec.ext}</div>`;
+    const flag = rec.hasGPS ? (rec.fpInfo ? '#00d4aa' : '#4a9eff') : '#64748b';
+    // Eye badge shows current visibility; whole tile click toggles it.
+    const eye = hidden ? '🚫' : '👁';
+    return `<div class="thumb" data-i="${i}" onclick="toggleImageVisible(${i})" title="${rec.name} — click to ${hidden ? 'show' : 'hide'} on map"
+        style="position:relative;flex:0 0 auto;width:60px;height:60px;border-radius:6px;overflow:hidden;
+        cursor:pointer;border:2px solid transparent;
+        opacity:${hidden ? '0.4' : '1'};filter:${hidden ? 'grayscale(1)' : 'none'}">
+        ${thumb}
+        <span style="position:absolute;top:1px;left:2px;font-size:11px;text-shadow:0 0 3px #000">${eye}</span>
+        <span style="position:absolute;bottom:2px;right:2px;width:8px;height:8px;border-radius:50%;
+          background:${flag};border:1px solid rgba(0,0,0,.4)"></span>
+      </div>`;
+  }).join('');
+  updateStripHighlight();
+}
+
+function updateStripHighlight() {
+  document.querySelectorAll('#strip .thumb').forEach(el => {
+    el.style.borderColor = (+el.dataset.i === activeIdx) ? 'var(--accent)' : 'transparent';
+  });
+}
+
+// ── CSV export of all loaded images ──────────────────────────────────────────
+function exportCSV() {
+  if (!images.length) return;
+  const cols = ['filename','model','camera_type','datetime','latitude','longitude',
+    'alt_rel_m','alt_abs_m','gimbal_yaw_deg','gimbal_pitch_deg','flight_yaw_deg',
+    'focal_mm','focal_35mm','gsd_cm_px','footprint_w_m','footprint_h_m','coverage_ha',
+    'width_px','height_px','band','central_wavelength_nm'];
+  const esc = v => {
+    if (v === null || v === undefined || (typeof v === 'number' && isNaN(v))) return '';
+    const s = String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
+  };
+  const rows = images.map(r => [
+    r.name, r.model, r.camType || '', r.dt || '',
+    r.hasGPS ? r.lat.toFixed(8) : '', r.hasGPS ? r.lon.toFixed(8) : '',
+    Number.isFinite(r.altRel) ? r.altRel.toFixed(2) : '',
+    Number.isFinite(r.bestAbs) ? r.bestAbs.toFixed(2) : '',
+    isNaN(r.gYaw) ? '' : r.gYaw.toFixed(1), isNaN(r.gPitch) ? '' : r.gPitch.toFixed(1),
+    isNaN(r.fYaw) ? '' : r.fYaw.toFixed(1),
+    r.focalMM ?? '', r.focal35mm ?? '',
+    r.gsd != null ? r.gsd.toFixed(2) : '',
+    r.fpInfo ? r.fpInfo.widthM.toFixed(1) : '', r.fpInfo ? r.fpInfo.heightM.toFixed(1) : '',
+    r.fpInfo ? r.fpInfo.areaHa.toFixed(4) : '',
+    r.imgW ?? '', r.imgH ?? '', r.bandName || '', r.centralWave || '',
+  ].map(esc).join(','));
+  const csv = cols.join(',') + '\n' + rows.join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'drone_exif_batch.csv';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// ── Clear all loaded images ──────────────────────────────────────────────────
+function clearImages() {
+  images.forEach(r => { try { URL.revokeObjectURL(r.url); } catch(e){} });
+  images = []; activeIdx = -1;
+  if (map) { markerLayer.clearLayers(); footprintLayer.clearLayers(); overlayLayer.clearLayers(); map.setView([20,0],2); }
+  document.getElementById('strip-bar').style.display = 'none';
+  document.getElementById('main').classList.remove('visible');
+  document.getElementById('dropzone').style.display = '';
+}
+
+// ── Measure tool (pixel distance on the full-resolution image + ground via GSD) ─
+let measurePts = [];   // points stored in ORIGINAL image pixels
+let measureRec = null;
+let measureZoom = 1;   // 1 = fit to window
+let measureFitW = 0;   // displayed width (px) at fit
+
+function openMeasure() {
+  const rec = images[activeIdx];
+  if (!rec) return;
+  if (!rec.canRender) {
+    alert('Measuring needs a viewable image (JPEG or PNG). TIFF and DNG can’t be displayed in the browser.');
+    return;
+  }
+  measureRec = rec;
+  measurePts = [];
+  document.getElementById('measure-title').textContent = rec.name;
+  document.getElementById('measure-dim').textContent =
+    (rec.imgW || '?') + ' × ' + (rec.imgH || '?') + ' px';
+  document.getElementById('measure-readout').textContent = 'Click two points on the image to measure';
+  document.getElementById('measure-svg').innerHTML = '';
+  document.getElementById('measure-modal').style.display = 'flex';  // show first so layout exists
+  const img = document.getElementById('measure-img');
+  img.onload = sizeMeasureFit;
+  img.src = rec.url;
+  if (img.complete && img.naturalWidth) sizeMeasureFit();   // cached image: onload may not refire
+}
+
+// Measure the natural "fit" width, then apply current zoom.
+function sizeMeasureFit() {
+  const img = document.getElementById('measure-img');
+  img.style.maxWidth = '95vw';
+  img.style.maxHeight = 'calc(100vh - 160px)';
+  img.style.width = 'auto';
+  img.style.height = 'auto';
+  measureFitW = img.getBoundingClientRect().width || img.naturalWidth || 1;
+  measureZoom = 1;
+  applyMeasureZoom();
+}
+function applyMeasureZoom() {
+  const img = document.getElementById('measure-img');
+  img.style.maxWidth = 'none';
+  img.style.maxHeight = 'none';
+  img.style.height = 'auto';
+  img.style.width = (measureFitW * measureZoom) + 'px';
+  document.getElementById('measure-zoom').textContent = Math.round(measureZoom * 100) + '%';
+  drawMeasure();
+}
+function measureZoomBy(factor) {
+  if (!measureRec) return;
+  measureZoom = Math.min(12, Math.max(0.25, measureZoom * factor));
+  applyMeasureZoom();
+}
+function measureFit() { measureZoom = 1; applyMeasureZoom(); }
+function closeMeasure() {
+  document.getElementById('measure-modal').style.display = 'none';
+  measurePts = []; measureRec = null;
+}
+function resetMeasure() {
+  measurePts = [];
+  document.getElementById('measure-svg').innerHTML = '';
+  document.getElementById('measure-readout').textContent = 'Click two points on the image to measure';
+}
+function measureScale() {
+  const img = document.getElementById('measure-img');
+  const rect = img.getBoundingClientRect();
+  const nat = img.naturalWidth || (measureRec && measureRec.imgW) || rect.width;
+  return { rect, scale: nat / rect.width };   // original px per displayed px
+}
+function drawMeasure() {
+  const svg = document.getElementById('measure-svg');
+  const { rect, scale } = measureScale();
+  svg.setAttribute('viewBox', `0 0 ${rect.width} ${rect.height}`);
+  const disp = measurePts.map(p => ({ x: p.x / scale, y: p.y / scale }));  // original → displayed
+  let html = '';
+  if (disp.length === 2) {
+    html += `<line x1="${disp[0].x}" y1="${disp[0].y}" x2="${disp[1].x}" y2="${disp[1].y}"
+      stroke="#00d4aa" stroke-width="2.5" stroke-dasharray="6 4"/>`;
+  }
+  disp.forEach(p => { html += `<circle cx="${p.x}" cy="${p.y}" r="5" fill="#00d4aa" stroke="#fff" stroke-width="2"/>`; });
+  svg.innerHTML = html;
+}
+function onMeasureClick(e) {
+  const { rect, scale } = measureScale();
+  const dx = e.clientX - rect.left, dy = e.clientY - rect.top;
+  if (dx < 0 || dy < 0 || dx > rect.width || dy > rect.height) return;
+  if (measurePts.length >= 2) measurePts = [];   // third click starts a new measurement
+  measurePts.push({ x: dx * scale, y: dy * scale });
+  drawMeasure();
+  if (measurePts.length === 2) reportMeasure();
+}
+function reportMeasure() {
+  const [a, b] = measurePts;
+  const distPx = Math.hypot(b.x - a.x, b.y - a.y);
+  let txt = `Distance: <b style="color:var(--accent2)">${distPx.toFixed(0)} px</b>`;
+  const gsd = measureRec && measureRec.gsd;   // cm/px at full resolution
+  if (gsd) {
+    const cm = distPx * gsd;
+    const ground = cm >= 100 ? (cm / 100).toFixed(2) + ' m' : cm.toFixed(1) + ' cm';
+    txt += ` &nbsp;·&nbsp; Ground: <b style="color:var(--accent2)">${ground}</b>` +
+           ` <span style="color:var(--muted)">(GSD ${gsd.toFixed(2)} cm/px)</span>`;
+  } else {
+    txt += ` <span style="color:var(--muted)">— ground distance needs GSD (unavailable for this image)</span>`;
+  }
+  document.getElementById('measure-readout').innerHTML = txt;
+}
+document.getElementById('measure-svg').addEventListener('click', onMeasureClick);
+// Mouse-wheel zoom over the image while measuring
+document.getElementById('measure-stage').addEventListener('wheel', e => {
+  if (document.getElementById('measure-modal').style.display === 'none' || !measureRec) return;
+  e.preventDefault();
+  measureZoomBy(e.deltaY < 0 ? 1.15 : 1 / 1.15);
+}, { passive: false });
+
+// Right-button drag to pan the (zoomed) image; left-click still measures.
+(function () {
+  const stage = document.getElementById('measure-stage');
+  let panning = false, sx = 0, sy = 0, sl = 0, st = 0;
+  stage.addEventListener('contextmenu', e => { if (measureRec) e.preventDefault(); });
+  stage.addEventListener('mousedown', e => {
+    if (e.button !== 2 || !measureRec) return;   // right button only
+    panning = true;
+    sx = e.clientX; sy = e.clientY; sl = stage.scrollLeft; st = stage.scrollTop;
+    stage.style.cursor = 'grabbing';
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', e => {
+    if (!panning) return;
+    stage.scrollLeft = sl - (e.clientX - sx);
+    stage.scrollTop  = st - (e.clientY - sy);
+  });
+  document.addEventListener('mouseup', () => {
+    if (!panning) return;
+    panning = false; stage.style.cursor = '';
+  });
+})();
+window.addEventListener('resize', () => {
+  if (document.getElementById('measure-modal').style.display !== 'none') drawMeasure();
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && document.getElementById('measure-modal').style.display !== 'none') closeMeasure();
+});
 
 // ── File input handling ────────────────────────────────────────────────────
 function openFilePicker() {
@@ -1093,21 +1412,28 @@ function openFilePicker() {
 }
 
 document.getElementById('fileInput').addEventListener('change', e => {
-  const f = e.target.files[0];
-  if (f) processFile(f);
+  if (e.target.files && e.target.files.length) processFiles(e.target.files);
 });
 
 // Wire every "choose file" trigger through openFilePicker
 document.getElementById('dropzone').addEventListener('click', openFilePicker);
-document.getElementById('btn-change').onclick = openFilePicker;
+document.getElementById('btn-change').onclick = openFilePicker;   // "+ Add" also uses this
 
 const dz = document.getElementById('dropzone');
 dz.addEventListener('dragover',  e => { e.preventDefault(); dz.classList.add('over'); });
 dz.addEventListener('dragleave', () => dz.classList.remove('over'));
-dz.addEventListener('drop', e => {
-  e.preventDefault(); dz.classList.remove('over');
-  const f = e.dataTransfer.files[0];
-  if (f) processFile(f);
+
+// Accept dropped files anywhere in the app (dropzone or the loaded view) — adds to the batch.
+['dragover','drop'].forEach(evt => {
+  document.addEventListener(evt, e => {
+    if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) {
+      e.preventDefault();
+      if (evt === 'drop') {
+        dz.classList.remove('over');
+        if (e.dataTransfer.files && e.dataTransfer.files.length) processFiles(e.dataTransfer.files);
+      }
+    }
+  });
 });
 </script>
 </body>
